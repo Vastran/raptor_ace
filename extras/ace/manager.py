@@ -1159,6 +1159,71 @@ class AceManager:
         toolhead = self.printer.lookup_object('toolhead')
         toolhead.wait_moves()
 
+    def _path_clear_settled(self, samples=4, gap_s=0.15):
+        """True if the filament path reads clear on any sample.
+
+        One instant read can still see the tip that the retract has
+        already started to pull off the sensor.
+        """
+        for i in range(samples):
+            if self.is_filament_path_free_instant():
+                return True
+            if i + 1 < samples:
+                self.reactor.pause(self.reactor.monotonic() + gap_s)
+        return False
+
+    def _extruder_can_extrude(self):
+        printer = getattr(self, "printer", None)
+        if printer is None:
+            return False
+        extruder = printer.lookup_object("extruder", None)
+        if extruder is None:
+            return False
+        heater = getattr(extruder, "heater", None)
+        if heater is None and hasattr(extruder, "get_heater"):
+            try:
+                heater = extruder.get_heater()
+            except Exception:
+                heater = None
+        if heater is None:
+            return False
+        return bool(getattr(heater, "can_extrude", False))
+
+    def _retract_extruder_until_toolhead_clear(self, retract_speed):
+        """Pull the tip off the toolhead sensor after the bowden is clear.
+
+        Capped at one extra toolhead_retraction_length. Does nothing when
+        the RDM is still covered, or when the nozzle is too cold to extrude.
+        """
+        if not self.get_instant_switch_state(SENSOR_TOOLHEAD):
+            return
+        if self.has_rdm_sensor() and self.get_instant_switch_state(SENSOR_RDM):
+            return
+        if not self._extruder_can_extrude():
+            self.gcode.respond_info(
+                "ACE: Toolhead sensor still covered, nozzle below min extrude "
+                "temp — not retracting further"
+            )
+            return
+        cap = abs(float(self.toolhead_retraction_length))
+        if cap <= 0:
+            return
+        step = min(10.0, cap)
+        moved = 0.0
+        self.gcode.respond_info(
+            "ACE: Toolhead sensor still covered after bowden unload — "
+            f"retracting extruder up to {cap:.0f}mm more"
+        )
+        while moved + 0.1 < cap and self.get_instant_switch_state(SENSOR_TOOLHEAD):
+            bite = min(step, cap - moved)
+            self._extruder_move(-bite, retract_speed, wait_for_move_end=True)
+            moved += bite
+        still = self.get_instant_switch_state(SENSOR_TOOLHEAD)
+        self.gcode.respond_info(
+            f"ACE: Extra toolhead retract {moved:.1f}mm, sensor "
+            f"{'still covered' if still else 'clear'}"
+        )
+
     def _extruder_move(self, length, speed, wait_for_move_end=False):
         """Move extruder (relative) via motion planner, synchronously."""
         if length == 0:
@@ -1343,8 +1408,13 @@ class AceManager:
 
                 # Wait for extruder to finish
                 self._wait_toolhead_move_finished()
+                if unload_ok and not self.is_filament_path_free_instant():
+                    # The bowden pull can finish while the tip is still
+                    # sitting on the toolhead sensor. The first extruder
+                    # retract only took up slack above the gears.
+                    self._retract_extruder_until_toolhead_clear(retract_speed)
 
-                if unload_ok and self.is_filament_path_free_instant():
+                if unload_ok and self._path_clear_settled():
                     self.state.set("ace_filament_pos", FILAMENT_STATE_BOWDEN)
                     self.gcode.respond_info(f"ACE: Tool {tool_index} unloaded successfully")
                     if not keep_heater:

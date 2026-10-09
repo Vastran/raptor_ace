@@ -4186,6 +4186,39 @@ class TestRmdTriggeredUnloadSlot(unittest.TestCase):
         self.assertFalse(result)
         instance._update_feed_assist.assert_called_once_with(3)
 
+    @patch('ace.instance.AceSerialManager')
+    def test_finished_unwind_queues_real_overshoot_move(self, mock_serial_mgr_class):
+        """When the RDM clears after the commanded unwind has already
+        ended, sleeping cannot pull more filament. A second retract of
+        overshoot_length must be sent."""
+        instance = AceInstance(0, self.ace_config, self.mock_printer)
+        manager = Mock()
+        manager.has_rdm_sensor.return_value = True
+        manager.get_instant_switch_state = Mock(return_value=False)
+        instance._disable_feed_assist = Mock()
+        instance._get_current_feed_assist_index = Mock(return_value=-1)
+        instance._update_feed_assist = Mock()
+
+        calls = []
+
+        def mock_retract(slot, length, speed, early_stop_callback=None):
+            calls.append((length, early_stop_callback is not None))
+            if early_stop_callback:
+                early_stop_callback()
+            return {'code': 0, 'msg': 'OK'}
+        instance._retract = Mock(side_effect=mock_retract)
+
+        times = self._time_generator(step=5.0)
+        with patch('ace.instance.time.time', side_effect=lambda: next(times)):
+            result = instance.rmd_triggered_unload_slot(
+                manager, slot=0, length=50, overshoot_length=10)
+
+        self.assertTrue(result)
+        self.assertEqual(len(calls), 2)
+        self.assertTrue(calls[0][1])
+        self.assertEqual(calls[1][0], 10)
+        self.assertFalse(calls[1][1])
+
 
 class TestFeedFilamentWithWaitForResponse(unittest.TestCase):
     """Branch coverage for feed_filament_with_wait_for_response."""

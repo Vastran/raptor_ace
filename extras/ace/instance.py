@@ -1360,17 +1360,33 @@ class AceInstance:
             if not rdm_has_filament and not rdm_state["cleared"]:
                 rdm_state["cleared"] = True
                 rdm_state["clear_time"] = elapsed
-
-                self.gcode.respond_info(
-                    f"ACE[{self.instance_num}]: RDM CLEAR after {elapsed:.1f}s — "
-                    f"applying {overshoot_length}mm overshoot"
-                )
-
-                # Overshoot: let the motor run a bit longer before stopping
-                overshoot_time = overshoot_length / self.retract_speed
-                if overshoot_time > 0:
-                    self.reactor.pause(
-                        self.reactor.monotonic() + overshoot_time
+                # A pause only extends an unwind that is still running.
+                # Once the commanded length has finished, sleeping leaves
+                # the tip at the sensor. Queue a real overshoot retract.
+                speed = self.retract_speed if self.retract_speed > 0 else 1.0
+                commanded_s = length / speed
+                remaining_s = commanded_s - elapsed
+                overshoot_s = overshoot_length / speed if overshoot_length > 0 else 0.0
+                if overshoot_length > 1.0 and remaining_s > 0.25:
+                    pause_s = min(overshoot_s, remaining_s)
+                    if pause_s > 0:
+                        self.reactor.pause(self.reactor.monotonic() + pause_s)
+                    shortfall = overshoot_length - (pause_s * speed)
+                    if shortfall > 1.0:
+                        rdm_state["overshoot_move"] = shortfall
+                    self.gcode.respond_info(
+                        f"ACE[{self.instance_num}]: RDM CLEAR after {elapsed:.1f}s — "
+                        f"holding unwind {pause_s:.2f}s for overshoot"
+                    )
+                elif overshoot_length > 1.0:
+                    rdm_state["overshoot_move"] = overshoot_length
+                    self.gcode.respond_info(
+                        f"ACE[{self.instance_num}]: RDM CLEAR after {elapsed:.1f}s — "
+                        f"unwind already finished, queuing {overshoot_length:.1f}mm overshoot"
+                    )
+                else:
+                    self.gcode.respond_info(
+                        f"ACE[{self.instance_num}]: RDM CLEAR after {elapsed:.1f}s"
                     )
                 return f"RDM clear at {elapsed:.1f}s"
 
@@ -1392,11 +1408,13 @@ class AceInstance:
             self.gcode.respond_info(
                 f"ACE[{self.instance_num}]: Retract error: {e}"
             )
+            self._apply_rdm_overshoot_move(slot, rdm_state)
             self._restore_assist_after_unload(manager, f_index)
             # If the sensor already cleared, the physical unload succeeded
             # even if wait_ready timed out afterward
             return rdm_state["cleared"]
 
+        self._apply_rdm_overshoot_move(slot, rdm_state)
         self._restore_assist_after_unload(manager, f_index)
 
         # Slot was already empty before retraction started
@@ -1417,6 +1435,27 @@ class AceInstance:
                 f"sensor never cleared during {length}mm retract!"
             )
             return False
+
+    def _apply_rdm_overshoot_move(self, slot, rdm_state):
+        """Retract the overshoot the live unwind could not cover.
+
+        ``reactor.pause`` only helps while the commanded unwind is still
+        moving. After that command ends, the motor is stopped and the
+        pause does not pull the tip past the RDM.
+        """
+        extra = rdm_state.get("overshoot_move") or 0
+        if not rdm_state.get("cleared") or extra <= 1.0:
+            return
+        self.gcode.respond_info(
+            f"ACE[{self.instance_num}]: RDM overshoot move {extra:.1f}mm "
+            f"@ {self.retract_speed:.1f}mm/s"
+        )
+        try:
+            self._retract(slot, extra, self.retract_speed)
+        except Exception as e:
+            self.gcode.respond_info(
+                f"ACE[{self.instance_num}]: Overshoot retract failed: {e}"
+            )
 
     def _restore_assist_after_unload(self, manager, f_index):
         """Restore the feed assist captured before an RDM-monitored retract.

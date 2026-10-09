@@ -22,7 +22,7 @@ coordinated-retraction call site to the same contract.
 from unittest.mock import Mock, patch
 
 from ace.manager import AceManager
-from ace.config import SENSOR_TOOLHEAD
+from ace.config import SENSOR_RDM, SENSOR_TOOLHEAD
 
 
 class TestSmartUnloadRdmEarlyStopGuard:
@@ -95,3 +95,45 @@ class TestSmartUnloadRdmEarlyStopGuard:
 
         inst.rmd_triggered_unload_slot.assert_called_once()
         inst._smart_unload_slot.assert_not_called()
+
+    def test_extra_extruder_retract_when_bowden_clear_toolhead_covered(self):
+        """RDM has cleared but the tip is still on the toolhead sensor.
+        One more hot extruder retract must run before the unload is failed."""
+        inst = self._instance()
+        mgr = self._manager(inst, rdm_has_filament=True)
+        state = {"toolhead": True, "rdm": True, "moves": 0}
+
+        def read(sensor_name):
+            if sensor_name == SENSOR_TOOLHEAD:
+                return state["toolhead"]
+            return state["rdm"]
+
+        def rmd_unload(*_args, **_kwargs):
+            state["rdm"] = False
+            return True
+
+        def extrude(_length, _speed, wait_for_move_end=False):
+            state["moves"] += 1
+            if state["moves"] > 1:
+                state["toolhead"] = False
+
+        inst.rmd_triggered_unload_slot.side_effect = rmd_unload
+        mgr.get_instant_switch_state = Mock(side_effect=read)
+        mgr.get_switch_state = Mock(side_effect=read)
+        mgr._extruder_move = Mock(side_effect=extrude)
+        mgr.is_filament_path_free_instant = Mock(
+            side_effect=lambda: not state["toolhead"] and not state["rdm"]
+        )
+        heater = Mock(can_extrude=True)
+        extruder = Mock(heater=heater)
+        mgr.printer = Mock()
+        mgr.printer.lookup_object = Mock(
+            side_effect=lambda name, default=None: extruder if name == "extruder" else default
+        )
+        mgr.reactor = Mock()
+        mgr.reactor.monotonic.return_value = 0.0
+        mgr.reactor.pause = Mock()
+
+        assert self._unload(mgr) is True
+        assert state["moves"] > 1
+        mgr.state.set.assert_any_call("ace_filament_pos", "bowden")
