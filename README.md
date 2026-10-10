@@ -9,12 +9,40 @@
 </p>
 
 Based on the great work of utkabobr ([DuckACE](https://github.com/utkabobr/DuckACE)) and szkrisz ([ACEPROSV08](https://github.com/szkrisz/ACEPROSV08)).
-This is a fork of szkrisz' ACEPRO Klipper driver, published as [Vastran/raptor_ace](https://github.com/Vastran/raptor_ace) and based on [Kobra-S1/ACEPRO](https://github.com/Kobra-S1/ACEPRO) `dev`.
+[Kobra-S1/ACEPRO](https://github.com/Kobra-S1/ACEPRO) is a fork of szkrisz' ACEPRO Klipper driver.
 ACE temperature sensor integration adapted from [agrloki/ValgACE](https://github.com/agrloki/ValgACE).
 
-Install it the same way as that driver: clone this repository as `~/ACEPRO` and run `./installer.sh`. The installer symlinks `extras/ace` into Klipper, so a later `git pull` and installer run is what the printer loads. Do not copy `extras/ace` over `klipper/klippy/extras/ace`; that replaces the symlink. Behavior added here (buffer release on retractions, and unloads that still clear the toolhead after the commanded retract) is described in [BUFFER.md](BUFFER.md).
+## This fork
 
-This Anycubic-centric fork has structurally diverged from the original and focuses on:
+[Vastran/raptor_ace](https://github.com/Vastran/raptor_ace) is a fork of [Kobra-S1/ACEPRO](https://github.com/Kobra-S1/ACEPRO) `dev`, based on commit `c89fe17`. This repository is the ACE host driver. Printer configuration stays with the printer.
+
+Feed assist fills the buffer inside the ACE and then holds the filament. During a print, an extruder retraction has nowhere to put that filament, so nozzle pressure climbs. That is the failure this fork is for, and it shows up in particular on ACE1, which has no command to run feed assist backward. A real retraction should open the buffer and then return to feed assist, on a schedule the host can predict, without stalling Klipper's motion planner.
+
+Unloads fail in a related way. After the commanded retract has finished, a pause adds no distance, and one extruder retract often only takes up slack above the gears. The sensors can still be covered when the driver reports that the unload failed.
+
+Install is the same procedure as ACEPRO: clone this repository as `~/ACEPRO` and run `./installer.sh`. See [Installation](#-installation). The same behavior is written up in [BUFFER.md](BUFFER.md).
+
+### What we changed
+
+Relative to Kobra-S1/ACEPRO `dev` at `c89fe17`:
+
+**Buffer release during printing** (`extras/ace/buffer_release.py`), on by default.
+
+- Extruder moves smaller than `buffer_release_min_mm` (0.4 mm) are ignored, so pressure-advance jitter is not a retract.
+- A retract rolls the active slot's gears back by that distance, capped at `buffer_release_max_mm` (2 mm), at `buffer_release_speed` (20 mm/s). Feed assist comes back after that window.
+- ACE2 switches the active slot from feed assist (`FEED_OR_ROLLBACK` mode 2) to rollback assist (mode 3), then back to feed assist.
+- ACE1 has no rollback-assist mode. The host stops feed assist without forgetting the slot, waits `buffer_release_restart_s` (0.25 s), unwinds that length, waits the unwind time plus the same gap, then starts feed assist again. A forward move inside that window does not start assist early. A rejected unwind is logged as `buffer unwind rejected`; raise `buffer_release_restart_s` when that line appears in `klippy.log`.
+- Toolchanges are left alone. The gear commands are queued to the move's print time and do not wait on the ACE.
+- Set `buffer_release: False` under `[ace]` to turn it off. The keys are commented in `config/ace_KS1.cfg`.
+
+**Unload after the commanded move has ended**
+
+- When the RDM sensor opens and the commanded unwind has already finished, the host sends a follow-up retract of the missing `rdm_overshoot_length`.
+- When the bowden path is clear, the nozzle is hot enough to extrude, and the toolhead sensor is still covered, the host retracts the extruder in short steps, up to one more `toolhead_retraction_length`, until that sensor opens.
+
+Everything below is the upstream driver's documentation.
+
+The upstream driver has structurally diverged from szkrisz' ACEPRO and focuses on:
 - Supports classic ACEPRO as well as the new ACE2 PRO
 - Supports mixed ACE + ACE2 PRO setups
 - Supporting multiple ACE units, assigns ACE instance IDs based on USB topology
@@ -39,6 +67,7 @@ In case your printer has two sensors (one at toolhead, one before that/outside t
 
 ## 📋 Table of Contents
 
+- [This fork](#this-fork)
 - [Features](#-features)
 - [Architecture](#-architecture)
 - [Hardware Requirements](#-hardware-requirements)
