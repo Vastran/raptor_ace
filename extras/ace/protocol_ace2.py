@@ -662,6 +662,10 @@ class AceProtoProtocolAdapter(AceProtocolAdapter):
         """Build the ACE2 get-status request."""
         return self._build_command_request("GET_STATUS")
 
+    def supports_rollback_assist(self) -> bool:
+        """ACE2 mode 3 is rollback assist, the buffer-open counterpart of mode 2."""
+        return True
+
     def build_start_feed_assist_request(self, slot_index: int) -> Dict[str, Any]:
         """Build the ACE2 feed-assist start request."""
         return self._build_command_request(
@@ -671,6 +675,28 @@ class AceProtoProtocolAdapter(AceProtocolAdapter):
                 "speed": 10,
                 "length": 0,
                 "mode": 2,
+            },
+        )
+
+    def build_rollback_assist_request(
+        self,
+        slot_index: int,
+        speed: float = 20,
+    ) -> Dict[str, Any]:
+        """Build the ACE2 rollback-assist request.
+
+        Mode 3 is the firmware state reported as rollback_assisting. Length
+        0 matches feed assist: the command stays active until the host
+        sends feed assist again. The host must limit how long it stays in
+        this mode, because the gears run backward while it is active.
+        """
+        return self._build_command_request(
+            "FEED_OR_ROLLBACK",
+            {
+                "index": slot_index,
+                "speed": int(speed),
+                "length": 0,
+                "mode": 3,
             },
         )
 

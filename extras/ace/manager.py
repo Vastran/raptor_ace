@@ -38,6 +38,7 @@ from .protocol import (
 )
 from .serial_manager import AceSerialManager
 from .version import get_driver_version
+from .buffer_release import BufferRelease
 import logging
 import re
 import serial
@@ -386,6 +387,8 @@ class AceManager:
         toolhead = self.printer.lookup_object("toolhead")
         for instance in self.instances:
             instance.toolhead = toolhead
+        self.buffer_release = BufferRelease(self)
+        self.buffer_release.install()
 
         self.gcode.respond_info(
             f"ACE: Syncing virtual pin to saved state: {self._ace_pro_enabled}"

@@ -122,6 +122,19 @@ def read_ace_config(config):
     ace_config["feed_assist_active_after_ace_connect"] = config.getboolean(
         "feed_assist_active_after_ace_connect", True
     )
+    # On an extruder retract, open the ACE buffer by running the slot
+    # gears backward, then return to feed assist. Ignores moves smaller
+    # than buffer_release_min_mm so pressure-advance jitter is not a retract.
+    ace_config["buffer_release"] = config.getboolean("buffer_release", True)
+    ace_config["buffer_release_min_mm"] = config.getfloat(
+        "buffer_release_min_mm", 0.4
+    )
+    ace_config["buffer_release_max_mm"] = config.getfloat(
+        "buffer_release_max_mm", 2.0
+    )
+    ace_config["buffer_release_speed"] = config.getfloat(
+        "buffer_release_speed", 20.0
+    )
     ace_config["rfid_inventory_sync_enabled"] = config.getboolean(
         "rfid_inventory_sync_enabled", True
     )

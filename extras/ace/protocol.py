@@ -335,6 +335,25 @@ class AceProtocolAdapter:
         """Build a request to disable feed assist for a slot."""
         raise NotImplementedError()
 
+    def supports_rollback_assist(self) -> bool:
+        """True when the firmware has a buffer-open assist mode.
+
+        Feed assist (ACE2 mode 2) fills the internal buffer and then holds
+        the filament. It does not run the gears backward when the extruder
+        retracts, so the buffer stays shut and nozzle pressure climbs.
+        Rollback assist (ACE2 mode 3) is the reverse of that. ACE1 has no
+        such mode.
+        """
+        return False
+
+    def build_rollback_assist_request(
+        self,
+        slot_index: int,
+        speed: float = 20,
+    ) -> Dict[str, Any]:
+        """Build a request to run the slot gears backward with the buffer."""
+        raise NotImplementedError()
+
     def feed_assist_causes_busy(self) -> bool:
         """Return True if activating feed assist transitions the device to a non-ready status.
 

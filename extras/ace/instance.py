@@ -566,6 +566,42 @@ class AceInstance:
         except Exception:
             return False
 
+    def _queue_gear_request(self, request):
+        """Enqueue a gear command without waiting.
+
+        Buffer release runs from the motion flush path. wait_ready() or a
+        dwell here would stall the planner.
+        """
+        self.send_high_prio_request(request, lambda response: None)
+
+    def queue_buffer_rollback(self, length, speed):
+        """Open the buffer by running the active slot's gears backward.
+
+        ACE2 switches from feed assist to rollback assist. ACE1 has no
+        assist-reverse mode, so it gets a finite unwind of ``length``.
+        No-op when feed assist is not active.
+        """
+        slot = self._feed_assist_index
+        if slot < 0:
+            return False
+        if self.protocol.supports_rollback_assist():
+            request = self.protocol.build_rollback_assist_request(slot, speed)
+        else:
+            request = self.protocol.build_unwind_filament_request(
+                slot, length, speed
+            )
+        self._queue_gear_request(request)
+        return True
+
+    def queue_buffer_feed(self):
+        """Return the active slot to feed assist. No-op if assist is off."""
+        slot = self._feed_assist_index
+        if slot < 0:
+            return False
+        request = self.protocol.build_start_feed_assist_request(slot)
+        self._queue_gear_request(request)
+        return True
+
     def _enable_feed_assist(self, slot_index):
         """Enable feed assist for smooth filament loading."""
         self._feed_assist_index = slot_index
