@@ -135,6 +135,12 @@ def read_ace_config(config):
     ace_config["buffer_release_speed"] = config.getfloat(
         "buffer_release_speed", 20.0
     )
+    # ACE1 only. Seconds to leave feed assist stopped before the unwind,
+    # also added before assist starts again. ACE1 will not run the gears
+    # backward while assist still owns them.
+    ace_config["buffer_release_restart_s"] = config.getfloat(
+        "buffer_release_restart_s", 0.25
+    )
     ace_config["rfid_inventory_sync_enabled"] = config.getboolean(
         "rfid_inventory_sync_enabled", True
     )

@@ -4,7 +4,11 @@ The ACE buffer is a spring loop inside the unit. Hall sensors tell the firmware 
 
 Feed assist (ACE2 `FEED_OR_ROLLBACK` mode 2) fills the buffer and then holds the filament. It does not run the gears backward when the extruder retracts, so each retract shoves filament into a buffer that is already shut and nozzle pressure climbs. Pressure-advance moves are too small to treat as retractions.
 
-`buffer_release` (on by default) watches extruder moves. A retract of at least `buffer_release_min_mm` (default 0.4) switches the active assist slot to rollback assist (ACE2 mode 3) for that distance, capped at `buffer_release_max_mm` (default 2). It then sends feed assist again so the buffer returns to its normal stop instead of staying open or ratcheting tighter. The commands are queued to the move's print time and do not wait on the ACE. ACE1 has no rollback-assist mode, so the same window sends a finite unwind of that length and then re-enables feed assist.
+`buffer_release` (on by default) watches extruder moves. A retract of at least `buffer_release_min_mm` (default 0.4), capped at `buffer_release_max_mm` (default 2), opens the buffer and then returns to feed assist. The commands are queued to the move's print time and do not wait on the ACE. Pressure-advance moves are ignored.
+
+ACE2 switches the active slot to rollback assist (`FEED_OR_ROLLBACK` mode 3) for that distance, then back to feed assist.
+
+ACE1 has no rollback-assist mode, and an unwind sent while feed assist is still running does not open the buffer: assist owns the gears and either ignores the unwind or pushes the loop shut again. On a retract the host stops feed assist without forgetting the slot, waits `buffer_release_restart_s` (default 0.25s), unwinds that retract length, waits the unwind time plus the same gap, then starts feed assist again. A forward move inside that window does not restart assist early. If `klippy.log` reports `buffer unwind rejected`, raise `buffer_release_restart_s`. The driver's 1s assist-stop wait is for toolchanges; using it on every retract would leave the extruder pulling against a stopped buffer.
 
 Set `buffer_release: False` under `[ace]` to turn this off.
 

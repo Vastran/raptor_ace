@@ -575,22 +575,55 @@ class AceInstance:
         self.send_high_prio_request(request, lambda response: None)
 
     def queue_buffer_rollback(self, length, speed):
-        """Open the buffer by running the active slot's gears backward.
+        """ACE2: switch the active slot from feed assist to rollback assist.
 
-        ACE2 switches from feed assist to rollback assist. ACE1 has no
-        assist-reverse mode, so it gets a finite unwind of ``length``.
-        No-op when feed assist is not active.
+        ACE1 has no rollback-assist mode. Use queue_buffer_assist_stop and
+        queue_buffer_unwind instead. No-op when feed assist is not active.
+        """
+        slot = self._feed_assist_index
+        if slot < 0 or not self.protocol.supports_rollback_assist():
+            return False
+        self._queue_gear_request(
+            self.protocol.build_rollback_assist_request(slot, speed)
+        )
+        return True
+
+    def queue_buffer_assist_stop(self):
+        """Stop feed assist without forgetting which slot it was on.
+
+        ACE1 ignores or immediately undoes an unwind while assist still
+        owns the gears. The index stays set so the release window can
+        unwind and then start assist again.
         """
         slot = self._feed_assist_index
         if slot < 0:
             return False
-        if self.protocol.supports_rollback_assist():
-            request = self.protocol.build_rollback_assist_request(slot, speed)
-        else:
-            request = self.protocol.build_unwind_filament_request(
-                slot, length, speed
-            )
-        self._queue_gear_request(request)
+        self._queue_gear_request(
+            self.protocol.build_stop_feed_assist_request(slot)
+        )
+        return True
+
+    def queue_buffer_unwind(self, length, speed):
+        """Finite unwind of the active slot. Does not wait."""
+        slot = self._feed_assist_index
+        if slot < 0:
+            return False
+        request = self.protocol.build_unwind_filament_request(
+            slot, length, speed
+        )
+
+        def _cb(response, inst_num=self.instance_num):
+            code = response.get("code") if isinstance(response, dict) else None
+            if code not in (0, None):
+                msg = response.get("msg", "") if isinstance(response, dict) else ""
+                logging.warning(
+                    "ACE[%s]: buffer unwind rejected (%s %s). "
+                    "Increase buffer_release_restart_s if feed assist "
+                    "was still stopping.",
+                    inst_num, code, msg,
+                )
+
+        self.send_high_prio_request(request, _cb)
         return True
 
     def queue_buffer_feed(self):
