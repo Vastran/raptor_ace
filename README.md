@@ -9,8 +9,10 @@
 </p>
 
 Based on the great work of utkabobr ([DuckACE](https://github.com/utkabobr/DuckACE)) and szkrisz ([ACEPROSV08](https://github.com/szkrisz/ACEPROSV08)).
-This is a fork of szkrisz' ACEPRO Klipper driver.
+This is a fork of szkrisz' ACEPRO Klipper driver, published as [Vastran/raptor_ace](https://github.com/Vastran/raptor_ace) and based on [Kobra-S1/ACEPRO](https://github.com/Kobra-S1/ACEPRO) `dev`.
 ACE temperature sensor integration adapted from [agrloki/ValgACE](https://github.com/agrloki/ValgACE).
+
+Install it the same way as that driver: clone this repository as `~/ACEPRO` and run `./installer.sh`. The installer symlinks `extras/ace` into Klipper, so a later `git pull` and installer run is what the printer loads. Do not copy `extras/ace` over `klipper/klippy/extras/ace`; that replaces the symlink. Behavior added here (buffer release on retractions, and unloads that still clear the toolhead after the commanded retract) is described in [BUFFER.md](BUFFER.md).
 
 This Anycubic-centric fork has structurally diverged from the original and focuses on:
 - Supports classic ACEPRO as well as the new ACE2 PRO
@@ -69,6 +71,7 @@ In case your printer has two sensors (one at toolhead, one before that/outside t
 - ✅ **Klipper Screen ACE-Pro panel enhancements**: Multiple-ACE support, RFID state, extra utilities commands, etc
 - ✅ **Standalone ACE Dashboard (ValgACE-inspired)**: Browser-based control/status panel served by Moonraker (`/ace.html`)
 - ✅ **Spoolman Integration**: Automatic spool selection via RFID-to-ID mapping or manual slot assignment
+- ✅ **Buffer release on retractions**: Opens the ACE buffer for a real extruder retract, then returns to feed assist. ACE2 uses rollback assist. ACE1 stops feed assist, unwinds, then starts assist again. See [BUFFER.md](BUFFER.md)
 - 🟠 **OrcaSlicer Filament Sync** *(requires recent Orca version)*: Filament type and color can be synced automatically from the ACE inventory into OrcaSlicer via the Moonraker `lane_data` integration — no manual spool selection needed. Manufacturer name sync is not yet supported by Orca.
 
 ### Standalone Web Dashboard
@@ -86,6 +89,7 @@ The browser-based dashboard (adapted from ValgACE) gives you a full ACE view wit
 **Start here for complete information:**
 
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** - System design, components, data flow
+- **[BUFFER.md](BUFFER.md)** - Buffer release during printing, and the unload follow-up retract
 - **[example_cmds.txt](example_cmds.txt)** - G-code command examples and usage
 - **[tests/README.md](tests/README.md)** - Test suite documentation
 
@@ -109,6 +113,7 @@ ace/
 ├── serial_manager.py     # Serial transport: connect, frame I/O, request queue
 ├── endless_spool.py      # Automatic filament switching logic
 ├── runout_monitor.py     # Filament runout & tangle detection during printing
+├── buffer_release.py     # Open the buffer on extruder retractions
 ├── commands.py           # G-code command handlers
 ├── config.py             # Configuration constants and helpers
 ├── persistent_state.py   # Deferred-flush saved_variables wrapper
@@ -306,8 +311,24 @@ Ready-made / printable adapter options on printables.com:
 1. **Clone Repository**
 ```bash
 cd ~
-git clone -b dev https://github.com/Kobra-S1/ACEPRO.git
+git clone -b dev https://github.com/Vastran/raptor_ace.git ACEPRO
 ```
+
+The directory name `ACEPRO` is part of the install. The installer and the paths below use `~/ACEPRO`, the same layout as [Kobra-S1/ACEPRO](https://github.com/Kobra-S1/ACEPRO).
+
+**Already have `~/ACEPRO` from the original repository?** Point it at this fork and run the installer again. When `printer.cfg` already exists, the installer leaves that component off unless you turn it on.
+
+```bash
+cd ~/ACEPRO
+git remote set-url origin https://github.com/Vastran/raptor_ace.git
+git fetch origin
+git checkout dev
+git pull --ff-only origin dev
+chmod +x installer.sh
+./installer.sh
+```
+
+If `git pull --ff-only` stops because the checkout has its own commits, look at those commits before running `git reset --hard origin/dev`. That reset drops local commits on `dev`.
 
 2. **Install Python Dependencies (if not already installed)**
 ```bash
