@@ -9,6 +9,7 @@ Responsibilities:
 - Port detection and enumeration
 """
 
+import select
 import serial
 import json
 import threading
@@ -41,6 +42,8 @@ class AceSerialManager:
     QUEUE_MAXSIZE = 1024
     WINDOW_SIZE = 4
     DEFAULT_TIMEOUT_S = 5.0
+    # A connected port that takes no output for this long is reconnected.
+    TX_STALL_LIMIT_S = 2.0
 
     def __init__(
             self,
@@ -104,6 +107,9 @@ class AceSerialManager:
         self._queue = queue.Queue(maxsize=self.QUEUE_MAXSIZE)
 
         self.read_buffer = bytearray()
+        # Frames not yet taken by the port, and since when it takes nothing.
+        self._tx_buffer = bytearray()
+        self._tx_stalled_since = None
         self.send_time = None
 
         self.writer_timer = None
@@ -724,7 +730,8 @@ class AceSerialManager:
                 port=port,
                 baudrate=baud,
                 timeout=0,
-                write_timeout=0.1
+                # Non-blocking. _drain_tx writes only what the port will take.
+                write_timeout=0
             )
             if self._serial.is_open:
                 self._connected = True
@@ -824,6 +831,8 @@ class AceSerialManager:
 
         self._connected = False
         self.read_buffer = bytearray()
+        self._tx_buffer = bytearray()
+        self._tx_stalled_since = None
         self.clear_queues()
 
         # Clear supervision counters on disconnect
@@ -1152,28 +1161,8 @@ class AceSerialManager:
                 self._request_id = next_id if next_id <= 0xFFFF else 1
 
         data = self.protocol.serialize_request_frame(request, self._calc_crc)
-
-        try:
-            with self._serial_lock:
-                self._serial.write(data)
-        except serial.SerialTimeoutException as e:
-            self.gcode.respond_info(
-                f"ACE[{self.instance_num}]: Serial write timeout: {e} (clearing inflight)"
-            )
-            with self._lock:
-                rid = request.get('id')
-                if rid in self.inflight:
-                    self.inflight.pop(rid, None)
-                    cb = self._callback_map.pop(rid, None)
-                    if cb:
-                        try:
-                            cb(response=None)
-                        except Exception as cb_e:
-                            self.gcode.respond_info(
-                                f"ACE[{self.instance_num}]: Timeout callback error: {cb_e}"
-                            )
-        except Exception as e:
-            self.gcode.respond_info(f"ACE[{self.instance_num}]: Serial write error: {e}")
+        self._tx_buffer += data
+        if not self._drain_tx():
             with self._lock:
                 rid = request.get('id')
                 if rid in self.inflight:
@@ -1186,6 +1175,60 @@ class AceSerialManager:
                             self.gcode.respond_info(
                                 f"ACE[{self.instance_num}]: Error callback error: {cb_e}"
                             )
+
+    def _tx_writable(self):
+        """Whether the port takes output right now, without waiting."""
+        try:
+            return bool(select.select([], [self._serial], [], 0)[1])
+        except (TypeError, ValueError, OSError):
+            # Tests and non-Linux hosts have no serial fileno. Write anyway.
+            return True
+
+    def _drain_tx(self):
+        """Write what the port takes of the pending output, without waiting.
+
+        This runs in the reactor, where a wait stalls all of Klipper. The
+        port is written only when it is writable. The rest stays buffered
+        for the next writer tick. A port that takes nothing for
+        TX_STALL_LIMIT_S is reconnected.
+
+        Returns False when the write failed and the output was dropped.
+        """
+        if not self._tx_buffer:
+            self._tx_stalled_since = None
+            return True
+        writable = False
+        try:
+            with self._serial_lock:
+                writable = self._tx_writable()
+                if writable:
+                    sent = self._serial.write(bytes(self._tx_buffer))
+                    if not isinstance(sent, int) or sent < 0:
+                        sent = len(self._tx_buffer)
+                    del self._tx_buffer[:sent]
+        except Exception as e:
+            self.gcode.respond_info(
+                f"ACE[{self.instance_num}]: Serial write error: {e}"
+            )
+            self._tx_buffer = bytearray()
+            self._tx_stalled_since = None
+            return False
+        if writable:
+            self._tx_stalled_since = None
+            return True
+
+        now = self.reactor.monotonic()
+        if self._tx_stalled_since is None:
+            self._tx_stalled_since = now
+        elif now - self._tx_stalled_since > self.TX_STALL_LIMIT_S:
+            self.gcode.respond_info(
+                f"ACE[{self.instance_num}]: Serial port took no data for "
+                f"{now - self._tx_stalled_since:.1f}s - reconnecting"
+            )
+            self._tx_buffer = bytearray()
+            self._tx_stalled_since = None
+            self.reconnect()
+        return True
 
     # ========== Frame Reading and Parsing ==========
 
@@ -1402,6 +1445,8 @@ class AceSerialManager:
         """Timer callback: send requests from queue, handle timeouts, fill window."""
         try:
             now = self.reactor.monotonic()
+            if self.is_connected():
+                self._drain_tx()
 
             with self._lock:
                 for rid, t0 in list(self.inflight.items()):

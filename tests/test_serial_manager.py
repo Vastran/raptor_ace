@@ -952,7 +952,7 @@ class TestConnectionLifecycle:
         self.manager._callback_map = {1: cb}
         from ace.serial_manager import AceSerialManager
         AceSerialManager._send_frame(self.manager, {"id": 1, "method": "ping"})
-        assert any("Timeout callback error" in args[0] for args, _ in self.mock_gcode.respond_info.call_args_list)
+        assert any("Error callback error" in args[0] for args, _ in self.mock_gcode.respond_info.call_args_list)
 
     def test_send_frame_generic_error_clears_inflight(self):
         self.manager._connected = True

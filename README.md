@@ -35,6 +35,14 @@ Relative to Kobra-S1/ACEPRO `dev` at `c89fe17`:
 - Toolchanges are left alone. The gear commands are queued to the move's print time and do not wait on the ACE.
 - Set `buffer_release: False` under `[ace]` to turn it off. The keys are commented in `config/ace_KS1.cfg`.
 
+**Taken from later ACEPRO work, not from the Kobra X printer profile**
+
+Kobra-S1 `dev` is still `c89fe17`. Newer commits on their `kobra-x` branch are for that machine's gated intake and panel. These three apply to this driver:
+
+- Serial writes no longer wait inside Klipper's reactor. Output the port will not take stays buffered, and a port that accepts nothing for 2 seconds is reconnected.
+- A direct extruder move updates G-code's E position only. The next `G1` does not undo that retract, and XYZ is left alone so a bed mesh does not shift the next travel.
+- If the cut macro fails, the unload stops and the filament stays put. An unload outside a print puts the nozzle back to the temperature it had before the cut, instead of always turning the heater off.
+
 **Unload after the commanded move has ended**
 
 - When the RDM sensor opens and the commanded unwind has already finished, the host sends a follow-up retract of the missing `rdm_overshoot_length`.

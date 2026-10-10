@@ -963,13 +963,22 @@ class AceManager:
             # RDM not available - check only toolhead
             return not toolhead_blocked
 
+    def _extruder_target(self):
+        """The extruder heater's target, 0 when it is off or unknown."""
+        try:
+            extruder = self.printer.lookup_object("extruder", None)
+            if extruder is None:
+                return 0.
+            return float(extruder.get_heater().get_temp(self.reactor.monotonic())[1])
+        except Exception:
+            return 0.
+
     def _turn_off_heater_if_idle(self):
         """
-        Turn off extruder heater if the printer is not currently printing.
-
-        Called after successful unload operations to avoid leaving the
-        heater on indefinitely when unloading outside of a print job.
-        During printing, the heater must stay on for the next toolchange.
+        Outside a print, put the extruder heater back to the target it had
+        before this unload heated for the cut. A target the user had set
+        stays. A heater that was off goes off. During printing the heater
+        stays on for the next toolchange.
         """
         try:
             print_stats = self.printer.lookup_object("print_stats", None)
@@ -981,8 +990,14 @@ class AceManager:
                         "ACE: Printer is printing/paused — keeping heater on"
                     )
                     return
-            self.gcode.respond_info("ACE: Not printing — turning off extruder heater")
-            self.gcode.run_script_from_command("M104 S0")
+            target = getattr(self, "_heater_target_before", 0.)
+            if target > 0:
+                self.gcode.respond_info(
+                    f"ACE: Not printing — extruder heater back to {target:.0f}C"
+                )
+            else:
+                self.gcode.respond_info("ACE: Not printing — turning off extruder heater")
+            self.gcode.run_script_from_command(f"M104 S{target:.0f}")
         except Exception as e:
             self.gcode.respond_info(f"ACE: Warning — could not turn off heater: {e}")
 
@@ -1028,8 +1043,10 @@ class AceManager:
             return True
 
         except Exception as e:
-            self.gcode.respond_info(f"ACE: Error preparing toolhead for retraction: {e}")
-            return False
+            raise Exception(
+                f"ACE: Preparing the toolhead for retraction failed, "
+                f"filament left in place: {e}"
+            ) from e
 
     def _ensure_hot_for_recovery_unload(self, current_tool, target_temp):
         """Heat the extruder before a plausibility-mismatch recovery unload.
@@ -1242,8 +1259,33 @@ class AceManager:
         new_pos[3] += length
 
         toolhead.move(new_pos, speed)
+        self._sync_gcode_extruder(toolhead)
         if wait_for_move_end:
             toolhead.wait_moves()
+
+    def _sync_gcode_extruder(self, toolhead):
+        """Copy only the extruder axis into gcode state after toolhead.move.
+
+        The move bypasses G-code, so the next G1 would drive E back to the
+        position G-code still remembers. A full reset_last_position also
+        copies Z, and on a meshed bed that makes the next travel command
+        the wrong height.
+        """
+        try:
+            gcode_move = self.printer.lookup_object('gcode_move', None)
+        except Exception:
+            return
+        if gcode_move is None:
+            return
+        last = getattr(gcode_move, 'last_position', None)
+        if not isinstance(last, (list, tuple)) or len(last) < 4:
+            return
+        updated = list(last)
+        try:
+            updated[3] = toolhead.get_position()[3]
+        except Exception:
+            return
+        gcode_move.last_position = updated
 
     @toolchange_in_progress_guard
     def smart_unload(self, tool_index=-1, prepare_toolhead=True, keep_heater=False,
@@ -1264,6 +1306,7 @@ class AceManager:
         normal print toolchange unloads never start cycling through spools.
         """
         current_tool_index = self.state.get("ace_current_index", -1)
+        self._heater_target_before = self._extruder_target()
 
         self.gcode.respond_info(f"ACE: Smart unload tool {tool_index} (current: {current_tool_index})")
 

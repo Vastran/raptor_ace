@@ -4647,6 +4647,17 @@ class TestTurnOffHeaterIfIdle(unittest.TestCase):
 
         manager.gcode.run_script_from_command.assert_called_once_with("M104 S0")
 
+    def test_idle_unload_restores_the_target_from_before_the_cut(self):
+        manager = self._build_manager()
+        mock_print_stats = Mock()
+        mock_print_stats.get_status.return_value = {"state": "standby"}
+        manager.printer.lookup_object = Mock(return_value=mock_print_stats)
+        manager._heater_target_before = 210
+
+        manager._turn_off_heater_if_idle()
+
+        manager.gcode.run_script_from_command.assert_called_once_with("M104 S210")
+
     def test_heater_stays_on_when_printing(self):
         """Heater should stay on when printer is actively printing."""
         manager = self._build_manager()

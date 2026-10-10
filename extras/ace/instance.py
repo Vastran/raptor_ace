@@ -2598,8 +2598,31 @@ class AceInstance:
         new_pos[3] += length
 
         toolhead.move(new_pos, speed)
+        self._sync_gcode_extruder(toolhead)
         if wait_for_move_end:
             toolhead.wait_moves()
+
+    def _sync_gcode_extruder(self, toolhead):
+        """Copy only the extruder axis into gcode state after toolhead.move.
+
+        See AceManager._sync_gcode_extruder. E is updated. XYZ is left as
+        G-code last commanded it.
+        """
+        try:
+            gcode_move = self.printer.lookup_object('gcode_move', None)
+        except Exception:
+            return
+        if gcode_move is None:
+            return
+        last = getattr(gcode_move, 'last_position', None)
+        if not isinstance(last, (list, tuple)) or len(last) < 4:
+            return
+        updated = list(last)
+        try:
+            updated[3] = toolhead.get_position()[3]
+        except Exception:
+            return
+        gcode_move.last_position = updated
 
     def reset_persistent_inventory(self):
         """Reset persistent inventory to empty slots."""
